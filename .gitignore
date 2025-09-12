@@ -1,0 +1,66 @@
+# --- Python artifacts ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env
+.env.*
+
+# Build/dist
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing/coverage
+.pytest_cache/
+.mypy_cache/
+.coverage*
+coverage.xml
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE/editor
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# --- Project specific ---
+# Local credentials
+user_info.txt
+
+# Generated results and datasets
+records/
+data/
+
+# Common data files (avoid pushing large/local datasets)
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.arrow
+*.orc
+*.xlsx
+*.xls
+*.h5
+*.hdf5
+*.npz
+*.npy
+*.pickle
+*.pkl
+*.sav
+*.dta
+*.rds

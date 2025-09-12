@@ -1,5 +1,6 @@
 
 import os
+import csv
 
 import requests
 from time import sleep
@@ -18,6 +19,112 @@ logger.basicConfig(
     level=logger.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
+# Lazy-initialized async lock for CSV writes to avoid race conditions
+CSV_LOCK = None  # will be created on first use inside event loop
+
+SIM_RESULTS_PATH = os.path.join('records', 'sim_results.csv')
+
+async def _ensure_csv_header(header):
+    """Ensure CSV file exists with header. Must be called under CSV_LOCK."""
+    if not os.path.exists(SIM_RESULTS_PATH):
+        # Create directory if not exists
+        os.makedirs(os.path.dirname(SIM_RESULTS_PATH), exist_ok=True)
+        def _write_header_sync():
+            with open(SIM_RESULTS_PATH, mode='w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=header)
+                writer.writeheader()
+        await asyncio.to_thread(_write_header_sync)
+
+async def _append_csv_row(row, header):
+    """Append one row to CSV using csv module in a thread to avoid blocking event loop."""
+    global CSV_LOCK
+    if CSV_LOCK is None:
+        CSV_LOCK = asyncio.Lock()
+    async with CSV_LOCK:
+        await _ensure_csv_header(header)
+        def _write_row_sync():
+            with open(SIM_RESULTS_PATH, mode='a', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=header)
+                writer.writerow(row)
+        await asyncio.to_thread(_write_row_sync)
+
+async def async_fetch_alpha_details(session, alpha_id):
+    """Fetch alpha detail via aiohttp; return metrics dict or None on failure."""
+    url = f"https://api.worldquantbrain.com/alphas/{alpha_id}"
+    try:
+        for _ in range(2):  # retry once on 401
+            async with session.get(url) as resp:
+                if resp.status == 401:
+                    # caller should refresh session if needed
+                    return {"_need_refresh": True}
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                # expected keys
+                out = {
+                    "code": data.get("regular", {}).get("code"),
+                    "is_sharpe": data.get("is", {}).get("sharpe"),
+                    "fitness": data.get("is", {}).get("fitness"),
+                    "turnover": data.get("is", {}).get("turnover"),
+                    "margin": data.get("is", {}).get("margin"),
+                    "dateCreated": data.get("dateCreated"),
+                }
+                return out
+    except Exception as e:
+        logger.info(f"async_fetch_alpha_details error for {alpha_id}: {e}")
+        return None
+
+async def append_sim_result(session_manager, alpha_id, alpha_expression, region_info, decay, delay, name, neut):
+    """Append simulation result row to records/sim_results.csv. Non-blocking and best-effort."""
+    try:
+        region, universe = region_info
+    except Exception:
+        region, universe = (None, None)
+    header = [
+        "timestamp", "tag", "alpha_id", "expr", "region", "universe", "delay", "decay", "neutralize",
+        "is_sharpe", "fitness", "turnover", "margin", "dateCreated"
+    ]
+
+    # Fetch metrics; refresh session once if needed
+    metrics = await async_fetch_alpha_details(session_manager.session, alpha_id)
+    if metrics and metrics.get("_need_refresh"):
+        try:
+            await session_manager.refresh_session()
+        except Exception:
+            pass
+        metrics = await async_fetch_alpha_details(session_manager.session, alpha_id)
+
+    row = {
+        "timestamp": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
+        "tag": name,
+        "alpha_id": alpha_id,
+        "expr": alpha_expression,
+        "region": region,
+        "universe": universe,
+        "delay": delay,
+        "decay": decay,
+        "neutralize": neut,
+        "is_sharpe": None,
+        "fitness": None,
+        "turnover": None,
+        "margin": None,
+        "dateCreated": None,
+    }
+    if metrics:
+        row.update({
+            "expr": metrics.get("code") or alpha_expression,
+            "is_sharpe": metrics.get("is_sharpe"),
+            "fitness": metrics.get("fitness"),
+            "turnover": metrics.get("turnover"),
+            "margin": metrics.get("margin"),
+            "dateCreated": metrics.get("dateCreated"),
+        })
+
+    try:
+        await _append_csv_row(row, header)
+    except Exception as e:
+        logger.info(f"append_sim_result failed for {alpha_id}: {e}")
 
 def login():
     # 从txt文件解密并读取数据
@@ -1369,6 +1476,12 @@ async def simulate_single(session_manager, alpha_expression, region_info, name, 
 
             async with aiofiles.open(f'records/{name}_simulated_alpha_expression.txt', mode='a') as f:
                 await f.write(alpha + '\n')
+
+            # Append a training row to sim_results.csv (best-effort)
+            try:
+                await append_sim_result(session_manager, alpha_id, alpha, (region, uni), decay, delay, name, neut)
+            except Exception as e:
+                logger.info(f"append_sim_result error for {alpha_id}: {e}")
 
             # stone_bag.append(alpha_id)
 
