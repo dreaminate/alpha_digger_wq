@@ -94,7 +94,7 @@ def backfill(tag, start_date, end_date, include_submitted=False, out_path=os.pat
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'tag': tag,
             'alpha_id': it.get('id'),
-            'expr': regular.get('code'),
+            'type': regular.get('code'),
             'region': settings.get('region'),
             'universe': settings.get('universe'),
             'delay': settings.get('delay'),
@@ -130,7 +130,7 @@ def backfill(tag, start_date, end_date, include_submitted=False, out_path=os.pat
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Backfill sim results from BRAIN by tag')
     parser.add_argument('--tag', type=str, default='analyst4_usa_1step', help='Tag/name used when creating alphas')
-    parser.add_argument('--start', type=str, default='2024-01-01', help='Start date YYYY-MM-DD')
+    parser.add_argument('--start', type=str, default='2025-09-12', help='Start date YYYY-MM-DD')
     parser.add_argument('--end', type=str, default=(datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d'), help='End date YYYY-MM-DD (exclusive)')
     parser.add_argument('--include-submitted', action='store_true', help='Include SUBMITTED status alphas')
     args = parser.parse_args()
