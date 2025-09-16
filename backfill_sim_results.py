@@ -7,11 +7,10 @@ from datetime import datetime, timedelta
 from machine_lib import login
 
 
-def iter_alphas_by_tag(session, tag, start_date, end_date, status=None, limit=100):
+def iter_alphas_by_date(session, start_date, end_date, limit=100):
     """
-    Generator that yields alpha records filtered by tag within [start_date, end_date).
-    Dates should be strings like '2024-01-01'.
-    status: None -> all, or 'UNSUBMITTED' / 'SUBMITTED'.
+    遍历 status=ACTIVE 的 alphas，按创建时间 [start_date, end_date) 过滤。
+    不对 tag 和 type 做任何过滤；仅把返回里的字段原样写出。
     """
     base = "https://api.worldquantbrain.com/users/self/alphas"
     offset = 0
@@ -19,28 +18,28 @@ def iter_alphas_by_tag(session, tag, start_date, end_date, status=None, limit=10
         qs = [
             f"limit={limit}",
             f"offset={offset}",
-            f"tag%3D{tag}",
             f"dateCreated%3E={start_date}T00:00:00-04:00",
             f"dateCreated%3C{end_date}T00:00:00-04:00",
-            "type=REGULAR",
+            "status=ACTIVE",
             "hidden=false",
-            "type!=SUPER",
             "order=-dateCreated",
         ]
-        if status:
-            qs.append(f"status={status}")
         url = base + "?" + "&".join(qs)
-
         resp = session.get(url)
-        # handle rate limit
-        if "retry-after" in resp.headers:
-            time.sleep(float(resp.headers["retry-after"]))
+
+        # 限流（兼容大小写）
+        ra = resp.headers.get("retry-after") or resp.headers.get("Retry-After")
+        if ra:
+            time.sleep(float(ra))
             continue
+
         data = resp.json()
         count = data.get("count", 0)
         results = data.get("results", [])
+
         for item in results:
             yield item
+
         offset += limit
         if offset >= count or offset >= 9900:
             break
@@ -50,8 +49,7 @@ def ensure_csv(path, header):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if not os.path.exists(path):
         with open(path, mode='w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=header)
-            writer.writeheader()
+            csv.DictWriter(f, fieldnames=header).writeheader()
 
 
 def load_existing_ids(path):
@@ -60,8 +58,7 @@ def load_existing_ids(path):
     ids = set()
     try:
         with open(path, mode='r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
+            for row in csv.DictReader(f):
                 if row.get('alpha_id'):
                     ids.add(row['alpha_id'])
     except Exception:
@@ -71,14 +68,21 @@ def load_existing_ids(path):
 
 def write_rows(path, rows, header):
     with open(path, mode='a', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=header)
-        for row in rows:
-            writer.writerow(row)
+        wr = csv.DictWriter(f, fieldnames=header)
+        for r in rows:
+            wr.writerow(r)
 
 
-def backfill(tag, start_date, end_date, include_submitted=False, out_path=os.path.join('records', 'sim_results.csv')):
+def backfill_active(start_date, end_date, out_path=os.path.join('records', 'sim_results.csv')):
+    """
+    从 BRAIN 拉取 [start_date, end_date) 内 status=ACTIVE 的 alphas，
+    写入 sim_results.csv（保留你原脚本中的列；tag 来自返回值，不再用传入参数）。
+    """
+    print(f"[Backfill ACTIVE] start={start_date} | end={end_date} | out={out_path}")
+
     s = login()
     header = [
+        # 你原脚本的列（保留）
         "timestamp", "tag", "alpha_id", "expr", "region", "universe", "delay", "decay", "neutralize",
         "is_sharpe", "fitness", "turnover", "margin", "dateCreated"
     ]
@@ -86,15 +90,19 @@ def backfill(tag, start_date, end_date, include_submitted=False, out_path=os.pat
     seen = load_existing_ids(out_path)
 
     def map_item(it):
-        # Safe map from list endpoint record to row
-        settings = it.get('settings', {})
-        isblk = it.get('is', {})
-        regular = it.get('regular', {})
+        settings = it.get('settings', {}) or {}
+        isblk = it.get('is', {}) or {}
+        regular = it.get('regular', {}) or {}
+
+        # tag：从返回对象里取唯一值（字符串或单元素列表）
+        tags_val = it.get("tags")
+        tag_single = tags_val if isinstance(tags_val, str) else (tags_val[0] if tags_val else None)
+
         return {
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'tag': tag,
+            'tag': tag_single,                     # 不再用函数参数，直接写返回里的唯一 tag
             'alpha_id': it.get('id'),
-            'type': regular.get('code'),
+            'expr': regular.get('code'),           # 修正：写入 expr（你原来误写到了 'type'）
             'region': settings.get('region'),
             'universe': settings.get('universe'),
             'delay': settings.get('delay'),
@@ -108,32 +116,25 @@ def backfill(tag, start_date, end_date, include_submitted=False, out_path=os.pat
         }
 
     rows = []
-    # UNSUBMITTED first
-    for rec in iter_alphas_by_tag(s, tag, start_date, end_date, status='UNSUBMITTED'):
+    for rec in iter_alphas_by_date(s, start_date, end_date):
         if rec.get('id') in seen:
             continue
         rows.append(map_item(rec))
-    # optionally SUBMITTED
-    if include_submitted:
-        for rec in iter_alphas_by_tag(s, tag, start_date, end_date, status='SUBMITTED'):
-            if rec.get('id') in seen:
-                continue
-            rows.append(map_item(rec))
 
     if rows:
         write_rows(out_path, rows, header)
-        print(f"Backfilled {len(rows)} rows into {out_path}")
+        print(f"Backfilled {len(rows)} ACTIVE rows into {out_path}")
     else:
-        print("No new rows to backfill.")
+        print("No new ACTIVE rows to backfill.")
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Backfill sim results from BRAIN by tag')
-    parser.add_argument('--tag', type=str, default='analyst4_usa_1step', help='Tag/name used when creating alphas')
-    parser.add_argument('--start', type=str, default='2025-09-12', help='Start date YYYY-MM-DD')
-    parser.add_argument('--end', type=str, default=(datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d'), help='End date YYYY-MM-DD (exclusive)')
-    parser.add_argument('--include-submitted', action='store_true', help='Include SUBMITTED status alphas')
+    parser = argparse.ArgumentParser(description='Backfill ACTIVE alphas by date (no tag filtering)')
+    parser.add_argument('--start', type=str, default='2025-09-12', help='Start date YYYY-MM-DD (inclusive)')
+    parser.add_argument('--end', type=str, default=(datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d'),
+                        help='End date YYYY-MM-DD (exclusive)')
+    parser.add_argument('--out', type=str, default=os.path.join('records', 'sim_results.csv'),
+                        help='输出 CSV 路径')
     args = parser.parse_args()
 
-    backfill(args.tag, args.start, args.end, include_submitted=args.include_submitted)
-
+    backfill_active(args.start, args.end, out_path=args.out)

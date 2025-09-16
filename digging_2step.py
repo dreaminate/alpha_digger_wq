@@ -111,4 +111,4 @@ if __name__ == '__main__':
     # 执行异步模拟，并控制并发数量为3
     asyncio.run(simulate_multiple_alphas(alpha_list, region_list, decay_list, delay_list,
                                          step2_tag, 'SUBINDUSTRY',
-                                         stone_bag, n_jobs=3))
+                                         stone_bag, n_jobs=1))

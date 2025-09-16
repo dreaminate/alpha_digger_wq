@@ -141,7 +141,7 @@ if __name__ == "__main__":
                         help="Start date YYYY-MM-DD (inclusive)")
     parser.add_argument("--end", type=str, default=(datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"),
                         help="End date YYYY-MM-DD (exclusive)")
-    parser.add_argument("--out", type=str, default=os.path.join("records", "submited.csv"),
+    parser.add_argument("--out", type=str, default=os.path.join("records", "submitted.csv"),
                         help="输出 CSV 路径")
     args = parser.parse_args()
 
