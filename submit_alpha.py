@@ -74,7 +74,7 @@ def submit_alpha(s, alpha_id):
 if __name__ == '__main__':
     s = login()
 
-    print("禁止直接运行此代码，自己修改submittable_alphas = ['xxx']，自动提交一时爽，value爆炸火葬场")
+    
 
     submitable_alpha_file = os.path.join(RECORDS_PATH, 'submitable_alpha.csv')
 
